@@ -146,6 +146,88 @@ impl<T> AtomicBox<T> {
         let ptr = self.ptr.load(Ordering::Relaxed);
         unsafe { &mut *ptr }
     }
+
+    pub fn load_raw(&self, order: Ordering) -> *const T {
+        self.ptr.load(order)
+    }
+
+    pub fn compare_exchange_raw(
+        &self,
+        current: *const T,
+        new: Box<T>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Box<T>, (*const T, Box<T>)> {
+        let mut local_new = new;
+        let result = self.compare_exchange_raw_mut(current, &mut local_new, success, failure);
+
+        match result {
+            Ok(_) => Ok(local_new),
+            Err(previous_ptr) => Err((previous_ptr, local_new)),
+        }
+    }
+
+    pub fn compare_exchange_raw_mut(
+        &self,
+        current: *const T,
+        new: &mut Box<T>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<*const T, *const T> {
+        let new_ptr = Box::into_raw(unsafe { ptr::read(new) });
+        let result = self
+            .ptr
+            .compare_exchange(current as *mut T, new_ptr, success, failure);
+
+        match result {
+            Ok(previous_ptr) => {
+                unsafe {
+                    ptr::write(new, Box::from_raw(previous_ptr));
+                }
+                Ok(previous_ptr as *const T)
+            }
+            Err(previous_ptr) => Err(previous_ptr as *const T),
+        }
+    }
+
+    pub fn compare_exchange_weak_raw(
+        &self,
+        current: *const T,
+        new: Box<T>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Box<T>, (*const T, Box<T>)> {
+        let mut local_new = new;
+        let result = self.compare_exchange_weak_raw_mut(current, &mut local_new, success, failure);
+
+        match result {
+            Ok(_) => Ok(local_new),
+            Err(previous_ptr) => Err((previous_ptr, local_new)),
+        }
+    }
+
+    pub fn compare_exchange_weak_raw_mut(
+        &self,
+        current: *const T,
+        new: &mut Box<T>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<*const T, *const T> {
+        let new_ptr = Box::into_raw(unsafe { ptr::read(new) });
+        let result = self
+            .ptr
+            .compare_exchange_weak(current as *mut T, new_ptr, success, failure);
+
+        match result {
+            Ok(previous_ptr) => {
+                unsafe {
+                    ptr::write(new, Box::from_raw(previous_ptr));
+                }
+                Ok(previous_ptr as *const T)
+            }
+            Err(previous_ptr) => Err(previous_ptr as *const T),
+        }
+    }
 }
 
 impl<T> Drop for AtomicBox<T> {
@@ -192,6 +274,116 @@ mod tests {
         let bis = Box::new("bis");
         assert_eq!(b.swap(bis, Ordering::AcqRel), Box::new("hello world"));
         assert_eq!(b.swap(Box::new(""), Ordering::AcqRel), Box::new("bis"));
+    }
+
+    #[test]
+    fn atomic_box_load_raw_works() {
+        let box1 = Box::new("hello world");
+        let ptr1 = &*box1 as *const &str;
+        let b = AtomicBox::new(box1);
+        let ptr2 = b.load_raw(Ordering::Relaxed);
+        assert_eq!(ptr1, ptr2);
+    }
+
+    #[test]
+    fn atomic_box_compare_exchange_raw_mut_works() {
+        let box1 = Box::new("box1");
+        let ptr1 = &*box1 as *const &str;
+        let mut box2 = Box::new("box2");
+        let ptr2 = &*box2 as *const &str;
+        let atom = AtomicBox::new(box1);
+
+        let ok_result =
+            atom.compare_exchange_raw_mut(ptr1, &mut box2, Ordering::AcqRel, Ordering::Acquire);
+        assert_eq!(box2, Box::new("box1"));
+        assert_eq!(ok_result, Ok(ptr1));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+
+        let err_result =
+            atom.compare_exchange_raw_mut(ptr1, &mut box2, Ordering::AcqRel, Ordering::Acquire);
+        assert_eq!(box2, Box::new("box1"));
+        assert_eq!(err_result, Err(ptr2));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+    }
+
+    #[test]
+    fn atomic_box_compare_exchange_raw_works() {
+        let box1 = Box::new("box1");
+        let ptr1 = &*box1 as *const &str;
+        let box2 = Box::new("box2");
+        let ptr2 = &*box2 as *const &str;
+        let atom = AtomicBox::new(box1);
+
+        let ok_result = atom.compare_exchange_raw(ptr1, box2, Ordering::AcqRel, Ordering::Acquire);
+        let ok_result_box = ok_result.unwrap();
+        assert_eq!(ok_result_box, Box::new("box1"));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+
+        let err_result =
+            atom.compare_exchange_raw(ptr1, ok_result_box, Ordering::AcqRel, Ordering::Acquire);
+        assert_eq!(err_result, Err((ptr2, Box::new("box1"))));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+    }
+
+    #[test]
+    fn atomic_box_compare_exchange_weak_raw_mut_works() {
+        let box1 = Box::new("box1");
+        let ptr1 = &*box1 as *const &str;
+        let mut box2 = Box::new("box2");
+        let ptr2 = &*box2 as *const &str;
+        let atom = AtomicBox::new(box1);
+
+        let ok_result = loop {
+            let result = atom.compare_exchange_weak_raw_mut(
+                ptr1,
+                &mut box2,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            );
+            if result.is_ok() {
+                break result;
+            }
+        };
+        assert_eq!(box2, Box::new("box1"));
+        assert_eq!(ok_result, Ok(ptr1));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+
+        let err_result = atom.compare_exchange_weak_raw_mut(
+            ptr1,
+            &mut box2,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        assert_eq!(box2, Box::new("box1"));
+        assert_eq!(err_result, Err(ptr2));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+    }
+
+    #[test]
+    fn atomic_box_compare_exchange_weak_raw_works() {
+        let box1 = Box::new("box1");
+        let ptr1 = &*box1 as *const &str;
+        let box2 = Box::new("box2");
+        let ptr2 = &*box2 as *const &str;
+        let atom = AtomicBox::new(box1);
+
+        let mut new_box = box2;
+        let old_box = loop {
+            let result =
+                atom.compare_exchange_weak_raw(ptr1, new_box, Ordering::SeqCst, Ordering::Relaxed);
+            match result {
+                Ok(b) => break b,
+                Err((_, b)) => new_box = b,
+            }
+        };
+
+        assert_eq!(old_box, Box::new("box1"));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+
+        let err_result =
+            atom.compare_exchange_weak_raw(ptr1, old_box, Ordering::AcqRel, Ordering::Acquire);
+        assert_eq!(err_result, Err((ptr2, Box::new("box1"))));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
     }
 
     #[test]
