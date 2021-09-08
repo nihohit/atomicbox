@@ -195,6 +195,88 @@ impl<T> AtomicOptionBox<T> {
             Some(unsafe { &mut *ptr })
         }
     }
+
+    pub fn load_raw(&self, order: Ordering) -> *const T {
+        self.ptr.load(order)
+    }
+
+    pub fn compare_exchange_raw(
+        &self,
+        current: *const T,
+        new: Option<Box<T>>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Option<Box<T>>, (*const T, Option<Box<T>>)> {
+        let mut local_new = new;
+        let result = self.compare_exchange_raw_mut(current, &mut local_new, success, failure);
+
+        match result {
+            Ok(_) => Ok(local_new),
+            Err(previous_ptr) => Err((previous_ptr, local_new)),
+        }
+    }
+
+    pub fn compare_exchange_raw_mut(
+        &self,
+        current: *const T,
+        new: &mut Option<Box<T>>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<*const T, *const T> {
+        let new_ptr = into_ptr(unsafe { ptr::read(new) });
+        let result = self
+            .ptr
+            .compare_exchange(current as *mut T, new_ptr, success, failure);
+
+        match result {
+            Ok(previous_ptr) => {
+                unsafe {
+                    ptr::write(new, from_ptr(previous_ptr));
+                }
+                Ok(previous_ptr as *const T)
+            }
+            Err(previous_ptr) => Err(previous_ptr as *const T),
+        }
+    }
+
+    pub fn compare_exchange_weak_raw(
+        &self,
+        current: *const T,
+        new: Option<Box<T>>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Option<Box<T>>, (*const T, Option<Box<T>>)> {
+        let mut local_new = new;
+        let result = self.compare_exchange_weak_raw_mut(current, &mut local_new, success, failure);
+
+        match result {
+            Ok(_) => Ok(local_new),
+            Err(previous_ptr) => Err((previous_ptr, local_new)),
+        }
+    }
+
+    pub fn compare_exchange_weak_raw_mut(
+        &self,
+        current: *const T,
+        new: &mut Option<Box<T>>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<*const T, *const T> {
+        let new_ptr = into_ptr(unsafe { ptr::read(new) });
+        let result = self
+            .ptr
+            .compare_exchange_weak(current as *mut T, new_ptr, success, failure);
+
+        match result {
+            Ok(previous_ptr) => {
+                unsafe {
+                    ptr::write(new, from_ptr(previous_ptr));
+                }
+                Ok(previous_ptr as *const T)
+            }
+            Err(previous_ptr) => Err(previous_ptr as *const T),
+        }
+    }
 }
 
 impl<T> Drop for AtomicOptionBox<T> {
