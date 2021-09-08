@@ -490,6 +490,57 @@ mod tests {
     }
 
     #[test]
+    fn atomic_threads_exchange() {
+        const NTHREADS: usize = 9;
+
+        let gate = Arc::new(Barrier::new(NTHREADS));
+        let abox: Arc<AtomicBox<Vec<u8>>> = Arc::new(Default::default());
+        let shared_box_ptr = abox.load_raw(Ordering::Relaxed) as usize;
+        let handles: Vec<_> = (0..NTHREADS as u8)
+            .map(|t| {
+                let my_gate = gate.clone();
+                let my_box = abox.clone();
+                spawn(move || {
+                    println!("{:?}", t);
+                    my_gate.wait();
+                    let mut my_vec = Box::new(vec![]);
+                    for _ in 0..100 {
+                        loop {
+                            let result = my_box.compare_exchange_weak_raw_mut(
+                                shared_box_ptr as *const Vec<u8>,
+                                &mut my_vec,
+                                Ordering::SeqCst,
+                                Ordering::Relaxed,
+                            );
+                            if result.is_ok() {
+                                break;
+                            }
+                        }
+                        my_vec.push(t);
+
+                        my_vec = my_box.swap(my_vec, Ordering::AcqRel);
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let mut counts = [0usize; NTHREADS];
+
+        for val in *abox.swap(Box::new(vec![]), Ordering::AcqRel) {
+            counts[val as usize] += 1;
+        }
+
+        println!("{:?}", counts);
+        for t in 0..NTHREADS {
+            assert_eq!(counts[t], 100);
+        }
+    }
+
+    #[test]
     #[should_panic(expected = "invalid ordering for atomic swap")]
     fn cant_use_foolish_swap_ordering_type() {
         let atom = AtomicBox::new(Box::new(0));
