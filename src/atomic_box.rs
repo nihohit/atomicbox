@@ -1,12 +1,23 @@
+use atomic_box_base::{AtomicBoxBase, PointerConvertible};
 use std::fmt::{self, Debug, Formatter};
-use std::mem::forget;
-use std::ptr::{self, null_mut};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::Ordering;
+
+impl<T> PointerConvertible for Box<T> {
+    type Target = T;
+
+    fn into_raw(b: Self) -> *mut T {
+        Box::into_raw(b)
+    }
+
+    unsafe fn from_raw(raw: *mut T) -> Self {
+        Box::from_raw(raw)
+    }
+}
 
 /// A type that holds a single `Box<T>` value and can be safely shared between
 /// threads.
 pub struct AtomicBox<T> {
-    ptr: AtomicPtr<T>,
+    base: AtomicBoxBase<Box<T>>,
 }
 
 impl<T> AtomicBox<T> {
@@ -19,11 +30,9 @@ impl<T> AtomicBox<T> {
     ///     let atomic_box = AtomicBox::new(Box::new(0));
     ///
     pub fn new(value: Box<T>) -> AtomicBox<T> {
-        let abox = AtomicBox {
-            ptr: AtomicPtr::new(null_mut()),
-        };
-        abox.ptr.store(Box::into_raw(value), Ordering::Release);
-        abox
+        AtomicBox {
+            base: AtomicBoxBase::new(value),
+        }
     }
 
     /// Atomically set this `AtomicBox` to `other` and return the previous value.
@@ -49,9 +58,7 @@ impl<T> AtomicBox<T> {
     ///     assert_eq!(*prev_value, "one");
     ///
     pub fn swap(&self, other: Box<T>, order: Ordering) -> Box<T> {
-        let mut result = other;
-        self.swap_mut(&mut result, order);
-        result
+        self.base.swap(other, order)
     }
 
     /// Atomically set this `AtomicBox` to `other` and drop its previous value.
@@ -75,9 +82,7 @@ impl<T> AtomicBox<T> {
     ///     assert_eq!(atom.into_inner(), Box::new("two"));
     ///
     pub fn store(&self, other: Box<T>, order: Ordering) {
-        let mut result = other;
-        self.swap_mut(&mut result, order);
-        drop(result)
+        self.base.store(other, order)
     }
 
     /// Atomically swaps the contents of this `AtomicBox` with the contents of `other`.
@@ -103,16 +108,7 @@ impl<T> AtomicBox<T> {
     ///     assert_eq!(*boxed, "one");
     ///
     pub fn swap_mut(&self, other: &mut Box<T>, order: Ordering) {
-        match order {
-            Ordering::AcqRel | Ordering::SeqCst => {}
-            _ => panic!("invalid ordering for atomic swap"),
-        }
-
-        let other_ptr = Box::into_raw(unsafe { ptr::read(other) });
-        let ptr = self.ptr.swap(other_ptr, order);
-        unsafe {
-            ptr::write(other, Box::from_raw(ptr));
-        }
+        self.base.swap_mut(other, order)
     }
 
     /// Consume this `AtomicBox`, returning the last box value it contained.
@@ -125,9 +121,7 @@ impl<T> AtomicBox<T> {
     ///     assert_eq!(atom.into_inner(), Box::new("hello"));
     ///
     pub fn into_inner(self) -> Box<T> {
-        let last_ptr = self.ptr.load(Ordering::Acquire);
-        forget(self);
-        unsafe { Box::from_raw(last_ptr) }
+        self.base.into_inner()
     }
 
     /// Returns a mutable reference to the contained value.
@@ -143,12 +137,12 @@ impl<T> AtomicBox<T> {
         // the reference expires, because this thread must rendezvous with
         // other threads, and execute a Release barrier, before this AtomicBox
         // becomes shared again.
-        let ptr = self.ptr.load(Ordering::Relaxed);
-        unsafe { &mut *ptr }
+        let ptr = self.base.load_raw(Ordering::Relaxed);
+        unsafe { &mut *(ptr as *mut T) }
     }
 
     pub fn load_raw(&self, order: Ordering) -> *const T {
-        self.ptr.load(order)
+        self.base.load_raw(order)
     }
 
     pub fn compare_exchange_raw(
@@ -158,13 +152,8 @@ impl<T> AtomicBox<T> {
         success: Ordering,
         failure: Ordering,
     ) -> Result<Box<T>, (*const T, Box<T>)> {
-        let mut local_new = new;
-        let result = self.compare_exchange_raw_mut(current, &mut local_new, success, failure);
-
-        match result {
-            Ok(_) => Ok(local_new),
-            Err(previous_ptr) => Err((previous_ptr, local_new)),
-        }
+        self.base
+            .compare_exchange_raw(current, new, success, failure)
     }
 
     pub fn compare_exchange_raw_mut(
@@ -174,20 +163,8 @@ impl<T> AtomicBox<T> {
         success: Ordering,
         failure: Ordering,
     ) -> Result<*const T, *const T> {
-        let new_ptr = Box::into_raw(unsafe { ptr::read(new) });
-        let result = self
-            .ptr
-            .compare_exchange(current as *mut T, new_ptr, success, failure);
-
-        match result {
-            Ok(previous_ptr) => {
-                unsafe {
-                    ptr::write(new, Box::from_raw(previous_ptr));
-                }
-                Ok(previous_ptr as *const T)
-            }
-            Err(previous_ptr) => Err(previous_ptr as *const T),
-        }
+        self.base
+            .compare_exchange_raw_mut(current, new, success, failure)
     }
 
     pub fn compare_exchange_weak_raw(
@@ -197,13 +174,8 @@ impl<T> AtomicBox<T> {
         success: Ordering,
         failure: Ordering,
     ) -> Result<Box<T>, (*const T, Box<T>)> {
-        let mut local_new = new;
-        let result = self.compare_exchange_weak_raw_mut(current, &mut local_new, success, failure);
-
-        match result {
-            Ok(_) => Ok(local_new),
-            Err(previous_ptr) => Err((previous_ptr, local_new)),
-        }
+        self.base
+            .compare_exchange_weak_raw(current, new, success, failure)
     }
 
     pub fn compare_exchange_weak_raw_mut(
@@ -213,30 +185,8 @@ impl<T> AtomicBox<T> {
         success: Ordering,
         failure: Ordering,
     ) -> Result<*const T, *const T> {
-        let new_ptr = Box::into_raw(unsafe { ptr::read(new) });
-        let result = self
-            .ptr
-            .compare_exchange_weak(current as *mut T, new_ptr, success, failure);
-
-        match result {
-            Ok(previous_ptr) => {
-                unsafe {
-                    ptr::write(new, Box::from_raw(previous_ptr));
-                }
-                Ok(previous_ptr as *const T)
-            }
-            Err(previous_ptr) => Err(previous_ptr as *const T),
-        }
-    }
-}
-
-impl<T> Drop for AtomicBox<T> {
-    /// Dropping an `AtomicBox<T>` drops the final `Box<T>` value stored in it.
-    fn drop(&mut self) {
-        let ptr = self.ptr.load(Ordering::Acquire);
-        unsafe {
-            Box::from_raw(ptr);
-        }
+        self.base
+            .compare_exchange_weak_raw_mut(current, new, success, failure)
     }
 }
 
@@ -253,7 +203,7 @@ where
 impl<T> Debug for AtomicBox<T> {
     /// The `{:?}` format of an `AtomicBox<T>` looks like `"AtomicBox(0x12341234)"`.
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        let p = self.ptr.load(Ordering::Relaxed);
+        let p = self.base.load_raw(Ordering::Relaxed);
         f.write_str("AtomicBox(")?;
         fmt::Pointer::fmt(&p, f)?;
         f.write_str(")")?;
