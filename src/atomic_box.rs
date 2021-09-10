@@ -214,7 +214,6 @@ impl<T> Debug for AtomicBox<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Barrier};
     use std::thread::spawn;
 
@@ -375,8 +374,7 @@ mod tests {
 
     #[test]
     fn atomic_box_drops() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Arc;
+        use std::sync::atomic::AtomicUsize;
 
         struct K(Arc<AtomicUsize>, usize);
 

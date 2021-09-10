@@ -255,6 +255,8 @@ impl<T> Debug for AtomicOptionBox<T> {
 mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Barrier};
+    use std::thread::spawn;
 
     #[test]
     fn atomic_option_box_swap_works() {
@@ -338,6 +340,61 @@ mod tests {
             assert_eq!(n.load(Ordering::Relaxed), 5);
         }
         assert_eq!(n.load(Ordering::Relaxed), 5 + 13);
+    }
+
+    #[test]
+    fn lockless_list() {
+        use std::mem::forget;
+
+        struct Node(AtomicOptionBox<Node>);
+
+        const NTHREADS: usize = 9;
+        const NITERATIONS: usize = 100;
+
+        let gate = Arc::new(Barrier::new(NTHREADS));
+        let mut head: Arc<AtomicOptionBox<Node>> = Arc::new(Default::default());
+        let handles: Vec<_> = (0..NTHREADS as u8)
+            .map(|t| {
+                let my_gate = gate.clone();
+                let my_head = head.clone();
+                spawn(move || {
+                    my_gate.wait();
+                    for _ in 0..NITERATIONS {
+                        let mut node_box = Box::new(Node(AtomicOptionBox::new(None)));
+                        let mut current_head_ptr = my_head.load_raw(Ordering::Acquire) as *mut Node;
+                        loop {
+                            let current_head_box = unsafe { Box::from_raw(current_head_ptr) };
+                            let prev_head_box = node_box.0.swap(Some(current_head_box), Ordering::AcqRel);
+                            forget(prev_head_box);
+                            let result = my_head.compare_exchange_weak_raw(current_head_ptr,
+                                    Some(node_box), Ordering::SeqCst, Ordering::Relaxed);
+                            match result {
+                                Ok(old_box) => {
+                                    forget(old_box);
+                                    break;
+                                },
+                                Err((previous_ptr, sent_box)) => {
+                                    current_head_ptr = previous_ptr as *mut Node;
+                                    node_box = sent_box.unwrap()
+                                },
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap()
+        }
+        let mut count: usize = 0;
+        let mut node = Arc::get_mut(&mut head).unwrap();
+        while let Some(next_node) = node.get_mut() {
+            node = &mut next_node.0;
+            count += 1;
+        }
+
+        assert_eq!(count, NTHREADS * NITERATIONS);
     }
 
     #[test]
