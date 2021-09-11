@@ -13,6 +13,16 @@ pub struct AtomicBoxBase<B: PointerConvertible> {
     ptr: AtomicPtr<B::Target>,
 }
 
+/*
+* opaque identifier for the atomic box. This allows users to receive identifiers that
+* represent the internal state of the atomic box, without leaking pointers that are
+* externally usable.
+*/
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct AtomicBoxIdentifier<T> {
+    pub(crate) ptr: *const T,
+}
+
 impl<B: PointerConvertible> AtomicBoxBase<B> {
     pub fn new(value: B) -> AtomicBoxBase<B> {
         let abox = AtomicBoxBase {
@@ -62,11 +72,11 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
 
     pub fn compare_exchange_raw(
         &self,
-        current: *const B::Target,
+        current: AtomicBoxIdentifier<B::Target>,
         new: B,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<B, (*const B::Target, B)> {
+    ) -> Result<B, (AtomicBoxIdentifier<B::Target>, B)> {
         let mut local_new = new;
         let result = self.compare_exchange_raw_mut(current, &mut local_new, success, failure);
 
@@ -78,34 +88,38 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
 
     pub fn compare_exchange_raw_mut(
         &self,
-        current: *const B::Target,
+        current: AtomicBoxIdentifier<B::Target>,
         new: &mut B,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<*const B::Target, *const B::Target> {
+    ) -> Result<AtomicBoxIdentifier<B::Target>, AtomicBoxIdentifier<B::Target>> {
         let new_ptr = B::into_raw(unsafe { ptr::read(new) });
         let result =
             self.ptr
-                .compare_exchange(current as *mut B::Target, new_ptr, success, failure);
+                .compare_exchange(current.ptr as *mut B::Target, new_ptr, success, failure);
 
         match result {
             Ok(previous_ptr) => {
                 unsafe {
                     ptr::write(new, B::from_raw(previous_ptr));
                 }
-                Ok(previous_ptr as *const B::Target)
+                Ok(AtomicBoxIdentifier {
+                    ptr: previous_ptr as *const B::Target,
+                })
             }
-            Err(previous_ptr) => Err(previous_ptr as *const B::Target),
+            Err(previous_ptr) => Err(AtomicBoxIdentifier {
+                ptr: previous_ptr as *const B::Target,
+            }),
         }
     }
 
     pub fn compare_exchange_weak_raw(
         &self,
-        current: *const B::Target,
+        current: AtomicBoxIdentifier<B::Target>,
         new: B,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<B, (*const B::Target, B)> {
+    ) -> Result<B, (AtomicBoxIdentifier<B::Target>, B)> {
         let mut local_new = new;
         let result = self.compare_exchange_weak_raw_mut(current, &mut local_new, success, failure);
 
@@ -117,24 +131,31 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
 
     pub fn compare_exchange_weak_raw_mut(
         &self,
-        current: *const B::Target,
+        current: AtomicBoxIdentifier<B::Target>,
         new: &mut B,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<*const B::Target, *const B::Target> {
+    ) -> Result<AtomicBoxIdentifier<B::Target>, AtomicBoxIdentifier<B::Target>> {
         let new_ptr = B::into_raw(unsafe { ptr::read(new) });
-        let result =
-            self.ptr
-                .compare_exchange_weak(current as *mut B::Target, new_ptr, success, failure);
+        let result = self.ptr.compare_exchange_weak(
+            current.ptr as *mut B::Target,
+            new_ptr,
+            success,
+            failure,
+        );
 
         match result {
             Ok(previous_ptr) => {
                 unsafe {
                     ptr::write(new, B::from_raw(previous_ptr));
                 }
-                Ok(previous_ptr as *const B::Target)
+                Ok(AtomicBoxIdentifier {
+                    ptr: previous_ptr as *const B::Target,
+                })
             }
-            Err(previous_ptr) => Err(previous_ptr as *const B::Target),
+            Err(previous_ptr) => Err(AtomicBoxIdentifier {
+                ptr: previous_ptr as *const B::Target,
+            }),
         }
     }
 }

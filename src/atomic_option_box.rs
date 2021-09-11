@@ -1,4 +1,4 @@
-use atomic_box_base::{AtomicBoxBase, PointerConvertible};
+use atomic_box_base::{AtomicBoxBase, AtomicBoxIdentifier, PointerConvertible};
 use std::fmt::{self, Debug, Formatter};
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering;
@@ -185,44 +185,44 @@ impl<T> AtomicOptionBox<T> {
 
     pub fn compare_exchange_raw(
         &self,
-        current: *const T,
+        current: AtomicBoxIdentifier<T>,
         new: Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<Option<Box<T>>, (*const T, Option<Box<T>>)> {
+    ) -> Result<Option<Box<T>>, (AtomicBoxIdentifier<T>, Option<Box<T>>)> {
         self.base
             .compare_exchange_raw(current, new, success, failure)
     }
 
     pub fn compare_exchange_raw_mut(
         &self,
-        current: *const T,
+        current: AtomicBoxIdentifier<T>,
         new: &mut Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<*const T, *const T> {
+    ) -> Result<AtomicBoxIdentifier<T>, AtomicBoxIdentifier<T>> {
         self.base
             .compare_exchange_raw_mut(current, new, success, failure)
     }
 
     pub fn compare_exchange_weak_raw(
         &self,
-        current: *const T,
+        current: AtomicBoxIdentifier<T>,
         new: Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<Option<Box<T>>, (*const T, Option<Box<T>>)> {
+    ) -> Result<Option<Box<T>>, (AtomicBoxIdentifier<T>, Option<Box<T>>)> {
         self.base
             .compare_exchange_weak_raw(current, new, success, failure)
     }
 
     pub fn compare_exchange_weak_raw_mut(
         &self,
-        current: *const T,
+        current: AtomicBoxIdentifier<T>,
         new: &mut Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<*const T, *const T> {
+    ) -> Result<AtomicBoxIdentifier<T>, AtomicBoxIdentifier<T>> {
         self.base
             .compare_exchange_weak_raw_mut(current, new, success, failure)
     }
@@ -364,19 +364,26 @@ mod tests {
                         let mut current_head_ptr = my_head.load_raw(Ordering::Acquire) as *mut Node;
                         loop {
                             let current_head_box = unsafe { Box::from_raw(current_head_ptr) };
-                            let prev_head_box = node_box.0.swap(Some(current_head_box), Ordering::AcqRel);
+                            let prev_head_box =
+                                node_box.0.swap(Some(current_head_box), Ordering::AcqRel);
                             forget(prev_head_box);
-                            let result = my_head.compare_exchange_weak_raw(current_head_ptr,
-                                    Some(node_box), Ordering::SeqCst, Ordering::Relaxed);
+                            let result = my_head.compare_exchange_weak_raw(
+                                AtomicBoxIdentifier {
+                                    ptr: current_head_ptr,
+                                },
+                                Some(node_box),
+                                Ordering::SeqCst,
+                                Ordering::Relaxed,
+                            );
                             match result {
                                 Ok(old_box) => {
                                     forget(old_box);
                                     break;
-                                },
+                                }
                                 Err((previous_ptr, sent_box)) => {
-                                    current_head_ptr = previous_ptr as *mut Node;
+                                    current_head_ptr = previous_ptr.ptr as *mut Node;
                                     node_box = sent_box.unwrap()
-                                },
+                                }
                             }
                         }
                     }

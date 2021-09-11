@@ -1,4 +1,4 @@
-use atomic_box_base::{AtomicBoxBase, PointerConvertible};
+use atomic_box_base::{AtomicBoxBase, AtomicBoxIdentifier, PointerConvertible};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::atomic::Ordering;
 
@@ -141,50 +141,52 @@ impl<T> AtomicBox<T> {
         unsafe { &mut *(ptr as *mut T) }
     }
 
-    pub fn load_raw(&self, order: Ordering) -> *const T {
-        self.base.load_raw(order)
+    pub fn load_raw(&self, order: Ordering) -> AtomicBoxIdentifier<T> {
+        AtomicBoxIdentifier::<T> {
+            ptr: self.base.load_raw(order),
+        }
     }
 
     pub fn compare_exchange_raw(
         &self,
-        current: *const T,
+        current: AtomicBoxIdentifier<T>,
         new: Box<T>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<Box<T>, (*const T, Box<T>)> {
+    ) -> Result<Box<T>, (AtomicBoxIdentifier<T>, Box<T>)> {
         self.base
             .compare_exchange_raw(current, new, success, failure)
     }
 
     pub fn compare_exchange_raw_mut(
         &self,
-        current: *const T,
+        current: AtomicBoxIdentifier<T>,
         new: &mut Box<T>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<*const T, *const T> {
+    ) -> Result<AtomicBoxIdentifier<T>, AtomicBoxIdentifier<T>> {
         self.base
             .compare_exchange_raw_mut(current, new, success, failure)
     }
 
     pub fn compare_exchange_weak_raw(
         &self,
-        current: *const T,
+        current: AtomicBoxIdentifier<T>,
         new: Box<T>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<Box<T>, (*const T, Box<T>)> {
+    ) -> Result<Box<T>, (AtomicBoxIdentifier<T>, Box<T>)> {
         self.base
             .compare_exchange_weak_raw(current, new, success, failure)
     }
 
     pub fn compare_exchange_weak_raw_mut(
         &self,
-        current: *const T,
+        current: AtomicBoxIdentifier<T>,
         new: &mut Box<T>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<*const T, *const T> {
+    ) -> Result<AtomicBoxIdentifier<T>, AtomicBoxIdentifier<T>> {
         self.base
             .compare_exchange_weak_raw_mut(current, new, success, failure)
     }
@@ -231,7 +233,7 @@ mod tests {
         let ptr1 = &*box1 as *const &str;
         let b = AtomicBox::new(box1);
         let ptr2 = b.load_raw(Ordering::Relaxed);
-        assert_eq!(ptr1, ptr2);
+        assert_eq!(ptr1, ptr2.ptr);
     }
 
     #[test]
@@ -241,18 +243,28 @@ mod tests {
         let mut box2 = Box::new("box2");
         let ptr2 = &*box2 as *const &str;
         let atom = AtomicBox::new(box1);
+        let identifier1 = AtomicBoxIdentifier { ptr: ptr1 };
+        let identifier2 = AtomicBoxIdentifier { ptr: ptr2 };
 
-        let ok_result =
-            atom.compare_exchange_raw_mut(ptr1, &mut box2, Ordering::AcqRel, Ordering::Acquire);
+        let ok_result = atom.compare_exchange_raw_mut(
+            identifier1,
+            &mut box2,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
         assert_eq!(box2, Box::new("box1"));
-        assert_eq!(ok_result, Ok(ptr1));
-        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+        assert_eq!(ok_result, Ok(identifier1));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), identifier2);
 
-        let err_result =
-            atom.compare_exchange_raw_mut(ptr1, &mut box2, Ordering::AcqRel, Ordering::Acquire);
+        let err_result = atom.compare_exchange_raw_mut(
+            identifier1,
+            &mut box2,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
         assert_eq!(box2, Box::new("box1"));
-        assert_eq!(err_result, Err(ptr2));
-        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+        assert_eq!(err_result, Err(identifier2));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), identifier2);
     }
 
     #[test]
@@ -262,16 +274,23 @@ mod tests {
         let box2 = Box::new("box2");
         let ptr2 = &*box2 as *const &str;
         let atom = AtomicBox::new(box1);
+        let identifier1 = AtomicBoxIdentifier { ptr: ptr1 };
+        let identifier2 = AtomicBoxIdentifier { ptr: ptr2 };
 
-        let ok_result = atom.compare_exchange_raw(ptr1, box2, Ordering::AcqRel, Ordering::Acquire);
+        let ok_result =
+            atom.compare_exchange_raw(identifier1, box2, Ordering::AcqRel, Ordering::Acquire);
         let ok_result_box = ok_result.unwrap();
         assert_eq!(ok_result_box, Box::new("box1"));
-        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+        assert_eq!(atom.load_raw(Ordering::Relaxed), identifier2);
 
-        let err_result =
-            atom.compare_exchange_raw(ptr1, ok_result_box, Ordering::AcqRel, Ordering::Acquire);
-        assert_eq!(err_result, Err((ptr2, Box::new("box1"))));
-        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+        let err_result = atom.compare_exchange_raw(
+            identifier1,
+            ok_result_box,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        assert_eq!(err_result, Err((identifier2, Box::new("box1"))));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), identifier2);
     }
 
     #[test]
@@ -281,10 +300,12 @@ mod tests {
         let mut box2 = Box::new("box2");
         let ptr2 = &*box2 as *const &str;
         let atom = AtomicBox::new(box1);
+        let identifier1 = AtomicBoxIdentifier { ptr: ptr1 };
+        let identifier2 = AtomicBoxIdentifier { ptr: ptr2 };
 
         let ok_result = loop {
             let result = atom.compare_exchange_weak_raw_mut(
-                ptr1,
+                identifier1,
                 &mut box2,
                 Ordering::SeqCst,
                 Ordering::Relaxed,
@@ -294,18 +315,18 @@ mod tests {
             }
         };
         assert_eq!(box2, Box::new("box1"));
-        assert_eq!(ok_result, Ok(ptr1));
-        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+        assert_eq!(ok_result, Ok(identifier1));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), identifier2);
 
         let err_result = atom.compare_exchange_weak_raw_mut(
-            ptr1,
+            identifier1,
             &mut box2,
             Ordering::AcqRel,
             Ordering::Acquire,
         );
         assert_eq!(box2, Box::new("box1"));
-        assert_eq!(err_result, Err(ptr2));
-        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+        assert_eq!(err_result, Err(identifier2));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), identifier2);
     }
 
     #[test]
@@ -315,11 +336,17 @@ mod tests {
         let box2 = Box::new("box2");
         let ptr2 = &*box2 as *const &str;
         let atom = AtomicBox::new(box1);
+        let identifier1 = AtomicBoxIdentifier { ptr: ptr1 };
+        let identifier2 = AtomicBoxIdentifier { ptr: ptr2 };
 
         let mut new_box = box2;
         let old_box = loop {
-            let result =
-                atom.compare_exchange_weak_raw(ptr1, new_box, Ordering::SeqCst, Ordering::Relaxed);
+            let result = atom.compare_exchange_weak_raw(
+                identifier1,
+                new_box,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            );
             match result {
                 Ok(b) => break b,
                 Err((_, b)) => new_box = b,
@@ -327,12 +354,16 @@ mod tests {
         };
 
         assert_eq!(old_box, Box::new("box1"));
-        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+        assert_eq!(atom.load_raw(Ordering::Relaxed), identifier2);
 
-        let err_result =
-            atom.compare_exchange_weak_raw(ptr1, old_box, Ordering::AcqRel, Ordering::Acquire);
-        assert_eq!(err_result, Err((ptr2, Box::new("box1"))));
-        assert_eq!(atom.load_raw(Ordering::Relaxed), ptr2);
+        let err_result = atom.compare_exchange_weak_raw(
+            identifier1,
+            old_box,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        assert_eq!(err_result, Err((identifier2, Box::new("box1"))));
+        assert_eq!(atom.load_raw(Ordering::Relaxed), identifier2);
     }
 
     #[test]
@@ -443,7 +474,7 @@ mod tests {
 
         let gate = Arc::new(Barrier::new(NTHREADS));
         let abox: Arc<AtomicBox<Vec<u8>>> = Arc::new(Default::default());
-        let shared_box_ptr = abox.load_raw(Ordering::Relaxed) as usize;
+        let shared_box_ptr = abox.load_raw(Ordering::Relaxed).ptr as usize;
         let handles: Vec<_> = (0..NTHREADS as u8)
             .map(|t| {
                 let my_gate = gate.clone();
@@ -455,7 +486,9 @@ mod tests {
                     for _ in 0..100 {
                         loop {
                             let result = my_box.compare_exchange_weak_raw_mut(
-                                shared_box_ptr as *const Vec<u8>,
+                                AtomicBoxIdentifier {
+                                    ptr: shared_box_ptr as *const Vec<u8>,
+                                },
                                 &mut my_vec,
                                 Ordering::SeqCst,
                                 Ordering::Relaxed,
