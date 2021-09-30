@@ -2,24 +2,24 @@ use std::mem::forget;
 use std::ptr::{self, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-pub trait PointerConvertible {
+pub(crate) trait PointerConvertible {
     type Target;
 
     fn into_raw(b: Self) -> *mut Self::Target;
     unsafe fn from_raw(raw: *mut Self::Target) -> Self;
 }
 
-pub struct AtomicBoxBase<B: PointerConvertible> {
+pub(crate) struct AtomicBoxBase<B: PointerConvertible> {
     ptr: AtomicPtr<B::Target>,
 }
 
 /*
-* opaque identifier for the atomic box. This allows users to receive identifiers that
+* opaque handle for the atomic box. This allows users to receive handles that
 * represent the internal state of the atomic box, without leaking pointers that are
 * externally usable.
 */
 #[derive(Debug, PartialEq, Copy, Clone)]
-pub struct AtomicBoxIdentifier<T> {
+pub struct Handle<T> {
     pub(crate) ptr: *const T,
 }
 
@@ -41,23 +41,26 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
         result
     }
 
-    pub fn store(&self, other: B, order: Ordering) {
+    pub fn store(&self, other: B, order: Ordering) -> Handle<B::Target> {
         let mut result = other;
-        self.swap_mut(&mut result, order);
-        drop(result)
+        let handle = self.swap_mut(&mut result, order);
+        drop(result);
+        return handle;
     }
 
-    pub fn swap_mut(&self, other: &mut B, order: Ordering) {
+    pub fn swap_mut(&self, other: &mut B, order: Ordering) -> Handle<B::Target> {
         match order {
             Ordering::AcqRel | Ordering::SeqCst => {}
             _ => panic!("invalid ordering for atomic swap"),
         }
 
         let other_ptr = B::into_raw(unsafe { ptr::read(other) });
+        let handle = Handle::<B::Target> { ptr: other_ptr };
         let ptr = self.ptr.swap(other_ptr, order);
         unsafe {
             ptr::write(other, B::from_raw(ptr));
         }
+        return handle;
     }
 
     pub fn into_inner(self) -> B {
@@ -72,11 +75,11 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
 
     pub fn compare_exchange_raw(
         &self,
-        current: AtomicBoxIdentifier<B::Target>,
+        current: Handle<B::Target>,
         new: B,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<B, (AtomicBoxIdentifier<B::Target>, B)> {
+    ) -> Result<B, (Handle<B::Target>, B)> {
         let mut local_new = new;
         let result = self.compare_exchange_raw_mut(current, &mut local_new, success, failure);
 
@@ -88,11 +91,11 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
 
     pub fn compare_exchange_raw_mut(
         &self,
-        current: AtomicBoxIdentifier<B::Target>,
+        current: Handle<B::Target>,
         new: &mut B,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<AtomicBoxIdentifier<B::Target>, AtomicBoxIdentifier<B::Target>> {
+    ) -> Result<Handle<B::Target>, Handle<B::Target>> {
         let new_ptr = B::into_raw(unsafe { ptr::read(new) });
         let result =
             self.ptr
@@ -103,11 +106,11 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
                 unsafe {
                     ptr::write(new, B::from_raw(previous_ptr));
                 }
-                Ok(AtomicBoxIdentifier {
+                Ok(Handle {
                     ptr: previous_ptr as *const B::Target,
                 })
             }
-            Err(previous_ptr) => Err(AtomicBoxIdentifier {
+            Err(previous_ptr) => Err(Handle {
                 ptr: previous_ptr as *const B::Target,
             }),
         }
@@ -115,11 +118,11 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
 
     pub fn compare_exchange_weak_raw(
         &self,
-        current: AtomicBoxIdentifier<B::Target>,
+        current: Handle<B::Target>,
         new: B,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<B, (AtomicBoxIdentifier<B::Target>, B)> {
+    ) -> Result<B, (Handle<B::Target>, B)> {
         let mut local_new = new;
         let result = self.compare_exchange_weak_raw_mut(current, &mut local_new, success, failure);
 
@@ -131,11 +134,11 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
 
     pub fn compare_exchange_weak_raw_mut(
         &self,
-        current: AtomicBoxIdentifier<B::Target>,
+        current: Handle<B::Target>,
         new: &mut B,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<AtomicBoxIdentifier<B::Target>, AtomicBoxIdentifier<B::Target>> {
+    ) -> Result<Handle<B::Target>, Handle<B::Target>> {
         let new_ptr = B::into_raw(unsafe { ptr::read(new) });
         let result = self.ptr.compare_exchange_weak(
             current.ptr as *mut B::Target,
@@ -149,11 +152,11 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
                 unsafe {
                     ptr::write(new, B::from_raw(previous_ptr));
                 }
-                Ok(AtomicBoxIdentifier {
+                Ok(Handle {
                     ptr: previous_ptr as *const B::Target,
                 })
             }
-            Err(previous_ptr) => Err(AtomicBoxIdentifier {
+            Err(previous_ptr) => Err(Handle {
                 ptr: previous_ptr as *const B::Target,
             }),
         }

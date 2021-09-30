@@ -1,4 +1,4 @@
-use atomic_box_base::{AtomicBoxBase, AtomicBoxIdentifier, PointerConvertible};
+use atomic_box_base::{AtomicBoxBase, Handle, PointerConvertible};
 use std::fmt::{self, Debug, Formatter};
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering;
@@ -91,7 +91,7 @@ impl<T> AtomicOptionBox<T> {
     ///     atom.store(Some(Box::new("ok")), Ordering::AcqRel);
     ///     assert_eq!(atom.into_inner(), Some(Box::new("ok")));
     ///
-    pub fn store(&self, other: Option<Box<T>>, order: Ordering) {
+    pub fn store(&self, other: Option<Box<T>>, order: Ordering) -> Handle<T> {
         self.base.store(other, order)
     }
 
@@ -145,7 +145,7 @@ impl<T> AtomicOptionBox<T> {
     ///     let prev_value = atom.swap_mut(&mut boxed, Ordering::AcqRel);
     ///     assert_eq!(boxed, None);
     ///
-    pub fn swap_mut(&self, other: &mut Option<Box<T>>, order: Ordering) {
+    pub fn swap_mut(&self, other: &mut Option<Box<T>>, order: Ordering) -> Handle<T> {
         self.base.swap_mut(other, order)
     }
 
@@ -185,44 +185,44 @@ impl<T> AtomicOptionBox<T> {
 
     pub fn compare_exchange_raw(
         &self,
-        current: AtomicBoxIdentifier<T>,
+        current: Handle<T>,
         new: Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<Option<Box<T>>, (AtomicBoxIdentifier<T>, Option<Box<T>>)> {
+    ) -> Result<Option<Box<T>>, (Handle<T>, Option<Box<T>>)> {
         self.base
             .compare_exchange_raw(current, new, success, failure)
     }
 
     pub fn compare_exchange_raw_mut(
         &self,
-        current: AtomicBoxIdentifier<T>,
+        current: Handle<T>,
         new: &mut Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<AtomicBoxIdentifier<T>, AtomicBoxIdentifier<T>> {
+    ) -> Result<Handle<T>, Handle<T>> {
         self.base
             .compare_exchange_raw_mut(current, new, success, failure)
     }
 
     pub fn compare_exchange_weak_raw(
         &self,
-        current: AtomicBoxIdentifier<T>,
+        current: Handle<T>,
         new: Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<Option<Box<T>>, (AtomicBoxIdentifier<T>, Option<Box<T>>)> {
+    ) -> Result<Option<Box<T>>, (Handle<T>, Option<Box<T>>)> {
         self.base
             .compare_exchange_weak_raw(current, new, success, failure)
     }
 
     pub fn compare_exchange_weak_raw_mut(
         &self,
-        current: AtomicBoxIdentifier<T>,
+        current: Handle<T>,
         new: &mut Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
-    ) -> Result<AtomicBoxIdentifier<T>, AtomicBoxIdentifier<T>> {
+    ) -> Result<Handle<T>, Handle<T>> {
         self.base
             .compare_exchange_weak_raw_mut(current, new, success, failure)
     }
@@ -354,7 +354,7 @@ mod tests {
         let gate = Arc::new(Barrier::new(NTHREADS));
         let mut head: Arc<AtomicOptionBox<Node>> = Arc::new(Default::default());
         let handles: Vec<_> = (0..NTHREADS as u8)
-            .map(|t| {
+            .map(|_| {
                 let my_gate = gate.clone();
                 let my_head = head.clone();
                 spawn(move || {
@@ -368,7 +368,7 @@ mod tests {
                                 node_box.0.swap(Some(current_head_box), Ordering::AcqRel);
                             forget(prev_head_box);
                             let result = my_head.compare_exchange_weak_raw(
-                                AtomicBoxIdentifier {
+                                Handle {
                                     ptr: current_head_ptr,
                                 },
                                 Some(node_box),
