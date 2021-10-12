@@ -10,17 +10,31 @@ pub(crate) trait PointerConvertible {
 }
 
 pub(crate) struct AtomicBoxBase<B: PointerConvertible> {
-    ptr: AtomicPtr<B::Target>,
+    pub(crate) ptr: AtomicPtr<B::Target>,
 }
 
-/*
-* opaque handle for the atomic box. This allows users to receive handles that
-* represent the internal state of the atomic box, without leaking pointers that are
-* externally usable.
-*/
-#[derive(Debug, PartialEq, Copy, Clone)]
+/// Opaque handle for the atomic box. This allows users to receive handles that
+/// represent the value of a box, without leaking pointers that are externally
+/// usable.
+#[derive(Debug, PartialEq)]
 pub struct Handle<T> {
     pub(crate) ptr: *const T,
+}
+
+unsafe impl<T> Send for Handle<T> {}
+unsafe impl<T> Sync for Handle<T> {}
+impl<T> Copy for Handle<T> {}
+
+impl<T> Clone for Handle<T> {
+    fn clone(&self) -> Handle<T> {
+        *self
+    }
+}
+
+pub trait HandleReferable {
+    type Target;
+
+    fn make_handle(&self) -> Handle<Self::Target>;
 }
 
 impl<B: PointerConvertible> AtomicBoxBase<B> {
@@ -41,26 +55,23 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
         result
     }
 
-    pub fn store(&self, other: B, order: Ordering) -> Handle<B::Target> {
+    pub fn store(&self, other: B, order: Ordering) {
         let mut result = other;
-        let handle = self.swap_mut(&mut result, order);
+        self.swap_mut(&mut result, order);
         drop(result);
-        return handle;
     }
 
-    pub fn swap_mut(&self, other: &mut B, order: Ordering) -> Handle<B::Target> {
+    pub fn swap_mut(&self, other: &mut B, order: Ordering) {
         match order {
             Ordering::AcqRel | Ordering::SeqCst => {}
             _ => panic!("invalid ordering for atomic swap"),
         }
 
         let other_ptr = B::into_raw(unsafe { ptr::read(other) });
-        let handle = Handle::<B::Target> { ptr: other_ptr };
         let ptr = self.ptr.swap(other_ptr, order);
         unsafe {
             ptr::write(other, B::from_raw(ptr));
-        }
-        return handle;
+        };
     }
 
     pub fn into_inner(self) -> B {
@@ -69,11 +80,13 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
         unsafe { B::from_raw(last_ptr) }
     }
 
-    pub fn load_raw(&self, order: Ordering) -> *const B::Target {
-        self.ptr.load(order)
+    pub fn load_handle(&self, order: Ordering) -> Handle<B::Target> {
+        Handle {
+            ptr: self.ptr.load(order),
+        }
     }
 
-    pub fn compare_exchange_raw(
+    pub fn compare_exchange(
         &self,
         current: Handle<B::Target>,
         new: B,
@@ -81,7 +94,7 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
         failure: Ordering,
     ) -> Result<B, (Handle<B::Target>, B)> {
         let mut local_new = new;
-        let result = self.compare_exchange_raw_mut(current, &mut local_new, success, failure);
+        let result = self.compare_exchange_mut(current, &mut local_new, success, failure);
 
         match result {
             Ok(_) => Ok(local_new),
@@ -89,7 +102,7 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
         }
     }
 
-    pub fn compare_exchange_raw_mut(
+    pub fn compare_exchange_mut(
         &self,
         current: Handle<B::Target>,
         new: &mut B,
@@ -116,7 +129,7 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
         }
     }
 
-    pub fn compare_exchange_weak_raw(
+    pub fn compare_exchange_weak(
         &self,
         current: Handle<B::Target>,
         new: B,
@@ -124,7 +137,7 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
         failure: Ordering,
     ) -> Result<B, (Handle<B::Target>, B)> {
         let mut local_new = new;
-        let result = self.compare_exchange_weak_raw_mut(current, &mut local_new, success, failure);
+        let result = self.compare_exchange_weak_mut(current, &mut local_new, success, failure);
 
         match result {
             Ok(_) => Ok(local_new),
@@ -132,7 +145,7 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
         }
     }
 
-    pub fn compare_exchange_weak_raw_mut(
+    pub fn compare_exchange_weak_mut(
         &self,
         current: Handle<B::Target>,
         new: &mut B,

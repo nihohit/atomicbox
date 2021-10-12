@@ -1,4 +1,4 @@
-use atomic_box_base::{AtomicBoxBase, Handle, PointerConvertible};
+use atomic_box_base::{AtomicBoxBase, Handle, PointerConvertible, HandleReferable};
 use std::fmt::{self, Debug, Formatter};
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering;
@@ -18,6 +18,17 @@ impl<T> PointerConvertible for Option<Box<T>> {
             None
         } else {
             Some(Box::from_raw(ptr))
+        }
+    }
+}
+
+impl<T> HandleReferable for Option<Box<T>> {
+    type Target = T;
+
+    fn make_handle(&self) -> Handle<T> {
+        match self {
+            Some(box_value) => box_value.make_handle(),
+            None => Handle { ptr: null_mut() },
         }
     }
 }
@@ -91,7 +102,7 @@ impl<T> AtomicOptionBox<T> {
     ///     atom.store(Some(Box::new("ok")), Ordering::AcqRel);
     ///     assert_eq!(atom.into_inner(), Some(Box::new("ok")));
     ///
-    pub fn store(&self, other: Option<Box<T>>, order: Ordering) -> Handle<T> {
+    pub fn store(&self, other: Option<Box<T>>, order: Ordering) {
         self.base.store(other, order)
     }
 
@@ -145,7 +156,7 @@ impl<T> AtomicOptionBox<T> {
     ///     let prev_value = atom.swap_mut(&mut boxed, Ordering::AcqRel);
     ///     assert_eq!(boxed, None);
     ///
-    pub fn swap_mut(&self, other: &mut Option<Box<T>>, order: Ordering) -> Handle<T> {
+    pub fn swap_mut(&self, other: &mut Option<Box<T>>, order: Ordering) {
         self.base.swap_mut(other, order)
     }
 
@@ -171,7 +182,7 @@ impl<T> AtomicOptionBox<T> {
     pub fn get_mut(&mut self) -> Option<&mut T> {
         // I have a convoluted theory that Relaxed is good enough here.
         // See comment in AtomicBox::get_mut().
-        let ptr = self.load_raw(Ordering::Relaxed);
+        let ptr = self.base.ptr.load(Ordering::Relaxed);
         if ptr.is_null() {
             None
         } else {
@@ -179,22 +190,21 @@ impl<T> AtomicOptionBox<T> {
         }
     }
 
-    pub fn load_raw(&self, order: Ordering) -> *const T {
-        self.base.load_raw(order)
+    pub fn load_handle(&self, order: Ordering) -> Handle<T> {
+        self.base.load_handle(order)
     }
 
-    pub fn compare_exchange_raw(
+    pub fn compare_exchange(
         &self,
         current: Handle<T>,
         new: Option<Box<T>>,
         success: Ordering,
         failure: Ordering,
     ) -> Result<Option<Box<T>>, (Handle<T>, Option<Box<T>>)> {
-        self.base
-            .compare_exchange_raw(current, new, success, failure)
+        self.base.compare_exchange(current, new, success, failure)
     }
 
-    pub fn compare_exchange_raw_mut(
+    pub fn compare_exchange_mut(
         &self,
         current: Handle<T>,
         new: &mut Option<Box<T>>,
@@ -202,10 +212,10 @@ impl<T> AtomicOptionBox<T> {
         failure: Ordering,
     ) -> Result<Handle<T>, Handle<T>> {
         self.base
-            .compare_exchange_raw_mut(current, new, success, failure)
+            .compare_exchange_mut(current, new, success, failure)
     }
 
-    pub fn compare_exchange_weak_raw(
+    pub fn compare_exchange_weak(
         &self,
         current: Handle<T>,
         new: Option<Box<T>>,
@@ -213,10 +223,10 @@ impl<T> AtomicOptionBox<T> {
         failure: Ordering,
     ) -> Result<Option<Box<T>>, (Handle<T>, Option<Box<T>>)> {
         self.base
-            .compare_exchange_weak_raw(current, new, success, failure)
+            .compare_exchange_weak(current, new, success, failure)
     }
 
-    pub fn compare_exchange_weak_raw_mut(
+    pub fn compare_exchange_weak_mut(
         &self,
         current: Handle<T>,
         new: &mut Option<Box<T>>,
@@ -224,7 +234,7 @@ impl<T> AtomicOptionBox<T> {
         failure: Ordering,
     ) -> Result<Handle<T>, Handle<T>> {
         self.base
-            .compare_exchange_weak_raw_mut(current, new, success, failure)
+            .compare_exchange_weak_mut(current, new, success, failure)
     }
 }
 
@@ -239,7 +249,7 @@ impl<T> Debug for AtomicOptionBox<T> {
     /// The `{:?}` format of an `AtomicOptionBox<T>` looks like
     /// `"AtomicOptionBox(0x12341234)"` or `"AtomicOptionBox(None)"`.
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        let p = self.load_raw(Ordering::Relaxed);
+        let p = self.base.ptr.load(Ordering::Relaxed);
         f.write_str("AtomicOptionBox(")?;
         if p.is_null() {
             f.write_str("None")?;
@@ -361,16 +371,15 @@ mod tests {
                     my_gate.wait();
                     for _ in 0..NITERATIONS {
                         let mut node_box = Box::new(Node(AtomicOptionBox::new(None)));
-                        let mut current_head_ptr = my_head.load_raw(Ordering::Acquire) as *mut Node;
+                        let mut current_head_handle = my_head.load_handle(Ordering::Acquire);
                         loop {
-                            let current_head_box = unsafe { Box::from_raw(current_head_ptr) };
+                            let current_head_box =
+                                unsafe { Box::from_raw(current_head_handle.ptr as *mut Node) };
                             let prev_head_box =
                                 node_box.0.swap(Some(current_head_box), Ordering::AcqRel);
                             forget(prev_head_box);
-                            let result = my_head.compare_exchange_weak_raw(
-                                Handle {
-                                    ptr: current_head_ptr,
-                                },
+                            let result = my_head.compare_exchange_weak(
+                                current_head_handle,
                                 Some(node_box),
                                 Ordering::SeqCst,
                                 Ordering::Relaxed,
@@ -380,8 +389,8 @@ mod tests {
                                     forget(old_box);
                                     break;
                                 }
-                                Err((previous_ptr, sent_box)) => {
-                                    current_head_ptr = previous_ptr.ptr as *mut Node;
+                                Err((previous_handle, sent_box)) => {
+                                    current_head_handle = previous_handle;
                                     node_box = sent_box.unwrap()
                                 }
                             }
