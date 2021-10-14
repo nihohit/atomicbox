@@ -151,10 +151,17 @@ impl<T> AtomicBox<T> {
         unsafe { &mut *(ptr as *mut T) }
     }
 
+    /// Returns a handle that matches the current held box.
+    /// load takes an Ordering argument which describes the memory ordering of this operation. Possible values are SeqCst, Acquire and Relaxed.
     pub fn load_handle(&self, order: Ordering) -> Handle<T> {
         self.base.load_handle(order)
     }
 
+    /// Stores a box into the atomic box if the value held by the atomic box matches the given current handle.
+    /// The return value is a result indicating whether the new box was written and containing the previous box. On success this value is guaranteed to be equal to current.
+    /// In case of failure, the returned value contains the handle that matches the value in the atomic box, and the given new box.
+    /// compare_exchange takes two Ordering arguments to describe the memory ordering of this operation. success describes the required ordering for the read-modify-write operation that takes place if the comparison with current succeeds. failure describes the required ordering for the load operation that takes place when the comparison fails. Using Acquire as success ordering makes the store part of this operation Relaxed, and using Release makes the successful load Relaxed. The failure ordering can only be SeqCst, Acquire or Relaxed and must be equivalent to or weaker than the success ordering.
+    /// Note: This method is only available on platforms that support atomic operations on pointers.
     pub fn compare_exchange(
         &self,
         current: Handle<T>,
