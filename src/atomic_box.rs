@@ -157,10 +157,10 @@ impl<T> AtomicBox<T> {
         self.base.load_handle(order)
     }
 
-    /// Stores a box into the atomic box if the value held by the atomic box matches the given current handle.
+    /// Stores a box into the atomic if the value held by the atomic matches the given current handle.
     /// The return value is a result indicating whether the new box was written and containing the previous box.
     /// On success the returned handle is guaranteed to match the current value.
-    /// On failure, the returned value contains the handle that matches the value in the atomic box, and the given new box.
+    /// On failure, the returned value contains the handle that matches the value in the atomic, and the given new box.
     /// compare_exchange takes two Ordering arguments to describe the memory ordering of this operation. success describes the required ordering for the read-modify-write operation that takes place if the comparison with current succeeds. failure describes the required ordering for the load operation that takes place when the comparison fails. Using Acquire as success ordering makes the store part of this operation Relaxed, and using Release makes the successful load Relaxed. The failure ordering can only be SeqCst, Acquire or Relaxed and must be equivalent to or weaker than the success ordering.
     /// Note: This method is only available on platforms that support atomic operations on pointers.
     pub fn compare_exchange(
@@ -173,10 +173,10 @@ impl<T> AtomicBox<T> {
         self.base.compare_exchange(current, new, success, failure)
     }
 
-    /// Stores a box into the atomic box and moves the value in the new box into the atomic box, if the value held by the atomic box matches the given current handle.
+    /// Stores the new box into the atomic and moves the value in the atomic into the new box, if the value held by the atomic matches the given current handle.
     /// The return value is a result indicating whether the new box was written.
     /// On success the returned handle is guaranteed to match the current value.
-    /// On failure, the returned value contains the handle that matches the value in the atomic box and new isn't mutated.
+    /// On failure, the returned value contains the handle that matches the value in the atomic, and new isn't mutated.
     /// compare_exchange_mut takes two Ordering arguments to describe the memory ordering of this operation. success describes the required ordering for the read-modify-write operation that takes place if the comparison with current succeeds. failure describes the required ordering for the load operation that takes place when the comparison fails. Using Acquire as success ordering makes the store part of this operation Relaxed, and using Release makes the successful load Relaxed. The failure ordering can only be SeqCst, Acquire or Relaxed and must be equivalent to or weaker than the success ordering.
     /// Note: This method is only available on platforms that support atomic operations on pointers.
     pub fn compare_exchange_mut(
@@ -190,11 +190,11 @@ impl<T> AtomicBox<T> {
             .compare_exchange_mut(current, new, success, failure)
     }
 
-    /// Stores a box into the atomic box if the value held by the atomic box matches the given current handle.
+    /// Stores a box into the atomic if the value held by the atomic matches the given current handle.
     /// Unlike AtomicBox::compare_exchange, this function is allowed to spuriously fail even when the comparison succeeds, which can result in more efficient code on some platforms.
     /// The return value is a result indicating whether the new box was written and containing the previous box.
     /// On success the returned handle is guaranteed to match the current value.
-    /// On failure, the returned value contains the handle that matches the value in the atomic box, and the given new box.
+    /// On failure, the returned value contains the handle that matches the value in the atomic, and the given new box unmutated.
     /// compare_exchange_weak takes two Ordering arguments to describe the memory ordering of this operation. success describes the required ordering for the read-modify-write operation that takes place if the comparison with current succeeds. failure describes the required ordering for the load operation that takes place when the comparison fails. Using Acquire as success ordering makes the store part of this operation Relaxed, and using Release makes the successful load Relaxed. The failure ordering can only be SeqCst, Acquire or Relaxed and must be equivalent to or weaker than the success ordering.
     /// Note: This method is only available on platforms that support atomic operations on pointers.
     pub fn compare_exchange_weak(
@@ -208,11 +208,11 @@ impl<T> AtomicBox<T> {
             .compare_exchange_weak(current, new, success, failure)
     }
 
-    /// Stores a box into the atomic box and moves the value in the new box into the atomic box, if the value held by the atomic box matches the given current handle.
+    /// Moves the value in the new box into the atomic and move the value in the atomic into the new box, if the value held by the atomic matches the given current handle.
     /// Unlike AtomicBox::compare_exchange_mut, this function is allowed to spuriously fail even when the comparison succeeds, which can result in more efficient code on some platforms.
     /// The return value is a result indicating whether the new box was written.
     /// On success the returned handle is guaranteed to match the current value.
-    /// On failure, the returned value contains the handle that matches the value in the atomic box and new isn't mutated.
+    /// On failure, the returned value contains the handle that matches the value in the atomic, and new isn't mutated.
     /// compare_exchange_weak_mut takes two Ordering arguments to describe the memory ordering of this operation. success describes the required ordering for the read-modify-write operation that takes place if the comparison with current succeeds. failure describes the required ordering for the load operation that takes place when the comparison fails. Using Acquire as success ordering makes the store part of this operation Relaxed, and using Release makes the successful load Relaxed. The failure ordering can only be SeqCst, Acquire or Relaxed and must be equivalent to or weaker than the success ordering.
     /// Note: This method is only available on platforms that support atomic operations on pointers.
     pub fn compare_exchange_weak_mut(
