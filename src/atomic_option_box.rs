@@ -196,6 +196,13 @@ impl<T> AtomicOptionBox<T> {
         self.base.load_handle(order)
     }
 
+    /// Returns a pointer to the currently held box. Using the pointer is unsafe for all of the usual reasons; e.g., the box might have been dropped from
+    /// the atomic by another thread by the time the pointer is dereferenced. If the current option is None, the returned pointer will be a null pointer.
+    /// load takes an Ordering argument which describes the memory ordering of this operation. Possible values are SeqCst, Acquire and Relaxed.
+    pub fn load_pointer(&self, order: Ordering) -> *mut T {
+        self.base.load_pointer(order)
+    }
+
     /// Stores a box into the atomic if the value held by the atomic matches the given current handle.
     /// The return value is a result indicating whether the new box was written and containing the previous box.
     /// On success the returned handle is guaranteed to match the current value.

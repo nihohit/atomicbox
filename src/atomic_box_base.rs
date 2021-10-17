@@ -82,8 +82,12 @@ impl<B: PointerConvertible> AtomicBoxBase<B> {
 
     pub fn load_handle(&self, order: Ordering) -> Handle<B::Target> {
         Handle {
-            ptr: self.ptr.load(order),
+            ptr: self.load_pointer(order),
         }
+    }
+
+    pub fn load_pointer(&self, order: Ordering) -> *mut B::Target {
+        self.ptr.load(order)
     }
 
     pub fn compare_exchange(
